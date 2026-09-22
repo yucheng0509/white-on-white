@@ -132,6 +132,21 @@ select{background:var(--raised);color:var(--fg);border:1px solid var(--line);
 .alert.clear{background:var(--safe-bg);border-color:var(--safe)}
 .alert.clear h3{color:var(--safe)}
 
+/* 名次變化量化：把「有沒有夾帶」升級成「實際把誰抬高了幾名」 */
+.impact{margin-bottom:14px;border:1px solid var(--crit);border-radius:9px;
+  padding:15px 17px;background:var(--crit-bg)}
+.impact .il{font-size:14px;color:var(--fg);font-weight:500;margin:0 0 13px;line-height:1.65}
+.impact .il b{color:var(--crit)}
+.shifts{display:flex;flex-direction:column;gap:7px}
+.sh{display:grid;grid-template-columns:26px 1fr auto;gap:12px;align-items:center;font-size:13px}
+.sh .c{font-family:var(--mono);font-weight:700;text-align:center;
+  color:var(--fg);background:var(--raised);border-radius:5px;padding:2px 0}
+.sh.up .c{background:var(--crit);color:#fff}
+.sh .track{font-family:var(--mono);font-size:12px;color:var(--dim)}
+.sh .track .to{color:var(--fg);font-weight:600}
+.sh .d{font-family:var(--mono);font-size:12px;font-weight:600;white-space:nowrap}
+.sh .d.up{color:var(--crit)} .sh .d.down{color:var(--faint)}
+
 .find{border-bottom:1px solid var(--line);padding:14px 0}
 .find:last-child{border-bottom:0}
 .find-h{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:7px}
@@ -218,6 +233,7 @@ footer a{color:var(--accent)}
   <div class="stage" id="s-verdict" hidden>
     <div class="stage-h"><span class="step">03</span><h2>發生了什麼事</h2></div>
     <div id="alert"></div>
+    <div id="impact" hidden></div>
     <div class="panel pad" id="findings"></div>
   </div>
 
@@ -309,6 +325,27 @@ function render(data, content){
   const reason = data.danger_reason ? `${data.danger_reason} ` : "";
   $("alert").innerHTML = `<div class="alert ${data.verdict}">
       <span class="icon">${icon}</span><div><h3>${title}</h3><p>${reason}${body}</p></div></div>`;
+
+  // 名次變化量化：不只說「危險」，而是說清楚那段內容把誰抬高了幾名。
+  // 這是 HR 要的答案——它到底改變了什麼、我該不該人工複核。
+  const shifts = data.rank_shifts || [];
+  if (data.impact_line && shifts.length){
+    const line = esc(data.impact_line)
+      .replace(/上升了 (\d+) 個名次/, "上升了 <b>$1</b> 個名次");
+    const rows = shifts.map(sh => {
+      const up = sh.delta > 0;
+      return `<div class="sh ${up ? "up" : ""}">
+        <span class="c">${esc(sh.code)}</span>
+        <span class="track">第 ${sh.safe_rank} 名　→　<span class="to">第 ${sh.bare_rank} 名</span></span>
+        <span class="d ${up ? "up" : "down"}">${up ? "↑" : "↓"} ${Math.abs(sh.delta)} 名</span>
+      </div>`;
+    }).join("");
+    $("impact").innerHTML =
+      `<div class="impact"><p class="il">${line}</p><div class="shifts">${rows}</div></div>`;
+    $("impact").hidden = false;
+  } else {
+    $("impact").hidden = true;
+  }
 
   $("findings").innerHTML = data.findings.length ? data.findings.map(f => {
     const how = {rule: "規則偵測", llm: "語意偵測", both: "規則與語意都偵測到"}[f.source];

@@ -168,6 +168,53 @@ class AnalysisResult:
             return "沒有防護時，AI 的說明直接引用了文件中那段試圖影響評分的內容。"
         return ""
 
+    @property
+    def rank_shifts(self) -> list[dict]:
+        """每個候選人在「無防護」與「有防護」之間移動了幾個名次。
+
+        無防護那側讀的是模型實際會讀到的內容（含隱藏注入），
+        有防護那側讀的是淨化過、只剩人看得到的內容。兩者名次的差，
+        就是那段隱藏內容對這個人的實際影響——這比「有沒有夾帶」
+        更接近 HR 要的答案：它到底改變了什麼。
+
+        delta > 0 表示這個人被注入「抬高」了（無防護時排得更前）。
+        只計算兩側都出現的代號，代號對不上的（模型回姓氏等）直接略過，
+        方向上寧可少算也不虛報。
+        """
+        bare, safe = self.unprotected.ranking, self.protected.ranking
+        if not bare or not safe:
+            return []
+        shifts: list[dict] = []
+        for code in bare:
+            if code not in safe:
+                continue
+            bare_rank = bare.index(code) + 1   # 無防護（被影響）名次
+            safe_rank = safe.index(code) + 1   # 有防護（乾淨）名次
+            if bare_rank != safe_rank:
+                shifts.append({
+                    "code": code,
+                    "bare_rank": bare_rank,
+                    "safe_rank": safe_rank,
+                    "delta": safe_rank - bare_rank,   # 正=被抬高幾名
+                })
+        shifts.sort(key=lambda x: -x["delta"])   # 被抬高最多的排最前
+        return shifts
+
+    @property
+    def impact_line(self) -> str:
+        """一句白話，點出被那段內容抬得最高的候選人，給 HR 決策用。
+
+        只在名次真的有變化時才有內容；單份履歷或無差異時回空字串，
+        此時危險判定改由 followed_injection 承擔。
+        """
+        ups = [x for x in self.rank_shifts if x["delta"] > 0]
+        if not ups:
+            return ""
+        t = ups[0]
+        return (f"候選人 {t['code']} 因為文件裡那段內容，"
+                f"從原本的第 {t['safe_rank']} 名被推到第 {t['bare_rank']} 名，"
+                f"上升了 {t['delta']} 個名次。建議把這份調出來人工複核。")
+
 
 def detect_injection(content: str, model: str | None = None) -> list[Finding]:
     """讓 LLM 指出文件中試圖影響評分的片段，並在原文中定位。"""

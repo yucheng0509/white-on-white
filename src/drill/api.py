@@ -334,6 +334,8 @@ def analyze_material(payload: AnalyzeIn) -> dict:
         "rankings_differ": result.rankings_differ,
         "followed_injection": result.followed_injection,
         "danger_reason": result.danger_reason,
+        "impact_line": result.impact_line,
+        "rank_shifts": result.rank_shifts,
         "unprotected": side(result.unprotected),
         "protected": side(result.protected),
         "findings": [
