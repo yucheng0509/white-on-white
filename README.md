@@ -63,7 +63,7 @@
 需要 Python 3.12+ 與一把 [Gemini API 金鑰](https://aistudio.google.com/apikey)。
 
 ```bash
-git clone <repo-url> && cd white-on-white
+git clone https://github.com/<你的帳號>/white-on-white.git && cd white-on-white
 uv sync                      # 或 pip install -e ".[dev]"
 cp .env.example .env         # 填入 GEMINI_API_KEY
 uvicorn drill.api:app --reload
