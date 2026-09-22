@@ -37,6 +37,9 @@ h2{font-size:16px;font-weight:600;margin:0 0 5px}
 .samp .t{font-weight:500;display:block}
 .samp .d{color:var(--faint);font-size:11.5px}
 .samp .tag{font-family:var(--mono);font-size:10px;color:var(--warn);letter-spacing:.05em}
+/* 實測命中率。放在卡片上，讓人一眼看出哪個樣本對新模型仍然有效 */
+.samp .n{display:block;margin-top:5px;max-width:30ch;font-size:10.5px;
+  line-height:1.45;color:var(--warn);opacity:.85}
 
 .drop{border:1.5px dashed var(--line);border-radius:8px;padding:20px;text-align:center;
   margin-bottom:14px;cursor:pointer;background:var(--ground)}
@@ -223,6 +226,7 @@ async function loadSamples(){
     `<button class="samp" data-i="${i}" aria-pressed="false">
        <span class="t">${esc(s.title)}　<span class="tag">${esc(s.tag)}</span></span>
        <span class="d">${esc(s.description)}</span>
+       ${s.note ? `<span class="n">${esc(s.note)}</span>` : ""}
      </button>`).join("");
   $("samples").addEventListener("click", e => {
     const btn = e.target.closest(".samp");

@@ -22,9 +22,9 @@ from drill.seeds import (
 
 
 def test_主矩陣是二乘四():
-    assert len(PRIMARY_MATRIX) == 8
+    assert len(PRIMARY_MATRIX) == 10
     assert {s["visibility"] for s in PRIMARY_MATRIX} == {"hidden", "plain"}
-    assert {s["strength"] for s in PRIMARY_MATRIX} == {1, 2, 3, 4}
+    assert {s["strength"] for s in PRIMARY_MATRIX} == {0, 1, 2, 3, 4}
 
 
 def test_同強度的兩種可見性payload必須逐字相同():
