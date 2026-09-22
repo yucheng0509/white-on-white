@@ -379,6 +379,78 @@ async def upload_document(file: UploadFile = File(...)) -> dict:
     }
 
 
+# 一次能掃描的檔案數上限。HR 真實的一批可能上百份，但示範用不著，
+# 且每份都要解壓縮，設個上限擋掉誤傳整個硬碟的情況。
+MAX_BATCH_FILES = 60
+
+
+@app.post("/scan-batch")
+async def scan_batch(files: list[UploadFile] = File(...)) -> dict:
+    """批次體檢：對一整批履歷做規則掃描，指出哪幾份藏了東西。
+
+    這一步完全不呼叫 AI——純粹比對每份文件「人看得到的」與
+    「模型讀得到的」，差集就是隱藏通道。快、免費、可先過濾，
+    HR 看完這張清單再決定哪幾份要挑掉、哪幾份要送去完整分析。
+
+    刻意不在這裡跑 analyze：一次對整批呼叫模型又貴又慢，
+    而且體檢的目的是「先讓人看見異常」，判斷權留給 HR。
+    """
+    if len(files) > MAX_BATCH_FILES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"一次最多 {MAX_BATCH_FILES} 份，這次收到 {len(files)} 份。",
+        )
+
+    results: list[dict] = []
+    for f in files:
+        name = f.filename or "(未命名)"
+        data = await f.read()
+        try:
+            doc = extract_mod.extract(name, data)
+        except (extract_mod.FileTooLarge, extract_mod.UnsupportedFile) as exc:
+            results.append({"filename": name, "ok": False, "error": str(exc)})
+            continue
+        except Exception as exc:
+            results.append({
+                "filename": name, "ok": False,
+                "error": f"無法解析：{type(exc).__name__}",
+            })
+            continue
+        results.append({
+            "filename": name,
+            "ok": True,
+            "file_type": doc.file_type,
+            "hidden_count": len(doc.hidden),
+            "hidden": [
+                {"kind": h.kind, "text": h.text, "context": h.context}
+                for h in doc.hidden
+            ],
+            "visible_text": doc.visible_text,
+            "machine_text": doc.machine_text,
+            "visible_chars": len(doc.visible_text),
+            "machine_chars": len(doc.machine_text),
+            "limitations": doc.limitations,
+        })
+
+    # 排序：有隱藏通道的排最前（HR 先看它們），其次是解析失敗的，
+    # 乾淨的沉到最後。同組內維持上傳順序。
+    def rank(r: dict) -> int:
+        if not r.get("ok"):
+            return 1
+        return 0 if r.get("hidden_count") else 2
+    results.sort(key=rank)
+
+    flagged = sum(1 for r in results if r.get("ok") and r.get("hidden_count"))
+    errored = sum(1 for r in results if not r.get("ok"))
+    return {
+        "total": len(results),
+        "flagged": flagged,
+        "clean": len(results) - flagged - errored,
+        "errored": errored,
+        "results": results,
+    }
+
+
 @app.get("/samples")
 def list_samples() -> list[dict]:
     """示範素材：同一批履歷配上不同的注入樣本，供前端一鍵載入。"""

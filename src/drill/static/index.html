@@ -59,6 +59,31 @@ h2{font-size:16px;font-weight:600;margin:0 0 5px}
 .upinfo .lim{margin-top:10px;font-size:11.5px;color:var(--faint);line-height:1.6}
 .counts{display:flex;gap:20px;margin-top:9px;font-family:var(--mono);font-size:12px}
 .counts b{color:var(--crit)}
+
+/* 批次體檢：HR 一次上傳整批，先看哪幾份藏了東西 */
+.batch{margin-bottom:14px}
+.batch-sum{font-size:13px;margin-bottom:10px;color:var(--dim)}
+.batch-sum b{color:var(--fg)}
+.batch-sum .f{color:var(--crit);font-weight:600}
+.bt{width:100%;border-collapse:collapse;font-size:12.5px;
+  border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.bt th{text-align:left;font-weight:500;color:var(--faint);
+  padding:8px 11px;background:var(--raised);border-bottom:1px solid var(--line)}
+.bt td{padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+.bt tr:last-child td{border-bottom:none}
+.bt tr.flag td{background:var(--crit-bg)}
+.bt .st{white-space:nowrap;font-weight:600}
+.bt .st.f{color:var(--crit)} .bt .st.c{color:var(--safe)} .bt .st.e{color:var(--faint)}
+.bt .fn{font-weight:500;word-break:break-all}
+.bt .ch{font-family:var(--mono);font-size:11px;color:var(--warn)}
+.bt .pk{color:var(--dim);display:block;margin-top:3px;max-width:34ch;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt .df{font-family:var(--mono);font-size:11px;color:var(--faint);white-space:nowrap}
+.bt .df b{color:var(--crit)}
+.bt .go{background:var(--accent);color:#fff;border:none;border-radius:6px;
+  padding:5px 11px;font-family:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap}
+.bt .go:hover{filter:brightness(1.1)} .bt .go.ghost{background:transparent;
+  border:1px solid var(--line);color:var(--dim)}
 textarea{width:100%;min-height:150px;background:var(--ground);color:var(--fg);
   border:1px solid var(--line);border-radius:7px;padding:13px;font-family:var(--mono);
   font-size:12px;line-height:1.65;resize:vertical}
@@ -150,13 +175,14 @@ footer a{color:var(--accent)}
     <div class="drop" id="drop" tabindex="0" role="button"
          aria-label="上傳履歷檔案，或把檔案拖進這個區域">
       <div class="big">上傳履歷檔案</div>
-      <div class="small">把 .docx 或 .pdf 拖進來，或點一下選擇檔案　·　也支援 .txt 與 .html</div>
-      <input type="file" id="file" accept=".docx,.pdf,.txt,.html,.htm,.md" hidden>
+      <div class="small">把 .docx 或 .pdf 拖進來，或點一下選擇檔案　·　<b style="color:var(--dim)">可一次選多份做批次體檢</b>　·　也支援 .txt 與 .html</div>
+      <input type="file" id="file" accept=".docx,.pdf,.txt,.html,.htm,.md" multiple hidden>
     </div>
     <p class="dl">手邊沒有檔案可以試？
       <a href="/samples/36/docx" download>下載示範 Word 履歷</a>
       —— 裡面藏了一段用 Word 隱藏屬性設定的「勘誤聲明」，在 Word 裡完全看不到，
       但擷取成純文字後連最新世代模型也會照著它竄改後的資歷排序。</p>
+    <div class="batch" id="batch" hidden></div>
     <div id="upinfo"></div>
     <textarea id="input" spellcheck="false" placeholder="貼上履歷內容，或用上面的方式上傳檔案…"></textarea>
     <div class="controls">
@@ -372,6 +398,95 @@ function showUpload(d){
     </div>${limHtml}</div>`;
 }
 
+let batchScan = null;   // 存最近一次批次掃描結果，供「送去分析」取用
+
+// 一或多份的分流：單份維持原本的單檔對照流程（核心 demo），
+// 多份先走批次體檢——HR 的真實情境是一整批，不是一份份貼。
+function handleFiles(list){
+  const files = Array.from(list || []);
+  if (!files.length) return;
+  if (files.length === 1){ $("batch").hidden = true; handleFile(files[0]); }
+  else scanBatch(files);
+}
+
+async function scanBatch(files){
+  $("err").hidden = true;
+  $("status").innerHTML = `<span class="spin"></span> 正在體檢 ${files.length} 份檔案…`;
+  try{
+    const body = new FormData();
+    files.forEach(f => body.append("files", f));
+    const res = await fetch("/scan-batch", {method: "POST", body});
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
+    batchScan = d;
+    renderBatch(d);
+    // 批次結果出來時，先清掉可能殘留的單檔分析
+    uploaded = null; $("upinfo").innerHTML = "";
+    ["s-compare","s-verdict","s-views"].forEach(id => $(id).hidden = true);
+    $("status").textContent = "";
+  }catch(e){
+    $("err").textContent = `體檢失敗：${e.message}`;
+    $("err").hidden = false;
+    $("status").textContent = "";
+  }
+}
+
+function renderBatch(d){
+  const rows = d.results.map((r, i) => {
+    if (!r.ok){
+      return `<tr><td class="st e">無法解析</td>
+        <td class="fn">${esc(r.filename)}</td>
+        <td colspan="2" style="color:var(--faint)">${esc(r.error || "")}</td>
+        <td></td><td></td></tr>`;
+    }
+    if (r.hidden_count){
+      const h = r.hidden[0];
+      const more = r.hidden_count > 1 ? `　等 ${r.hidden_count} 處` : "";
+      return `<tr class="flag">
+        <td class="st f">● 有夾帶</td>
+        <td class="fn">${esc(r.filename)}</td>
+        <td><span class="ch">${esc(KIND_NAMES[h.kind] || h.kind)}${more}</span>
+            <span class="pk">${esc(h.text.slice(0, 40))}</span></td>
+        <td class="df">人 ${r.visible_chars} ／機 <b>${r.machine_chars}</b></td>
+        <td><button class="go" data-i="${i}">送去分析 →</button></td></tr>`;
+    }
+    return `<tr>
+      <td class="st c">○ 乾淨</td>
+      <td class="fn">${esc(r.filename)}</td>
+      <td style="color:var(--faint)">人看到的與模型讀到的一致</td>
+      <td class="df">${r.machine_chars} 字</td>
+      <td><button class="go ghost" data-i="${i}">仍要分析</button></td></tr>`;
+  }).join("");
+
+  $("batch").innerHTML = `
+    <div class="batch-sum">體檢 <b>${d.total}</b> 份　·　
+      <span class="f">${d.flagged}</span> 份夾帶了人看不到的內容　·　
+      ${d.clean} 份乾淨${d.errored ? `　·　${d.errored} 份無法解析` : ""}。
+      呼叫任何 AI 之前，純規則掃描的結果——先挑出可疑的，再決定要不要送給模型判斷。</div>
+    <table class="bt"><thead><tr>
+      <th>狀態</th><th>檔名</th><th>藏了什麼</th><th>字數</th><th></th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+  $("batch").hidden = false;
+
+  $("batch").querySelectorAll(".go").forEach(btn =>
+    btn.addEventListener("click", () => loadFromBatch(+btn.dataset.i)));
+}
+
+// 從批次表挑一份，灌進單檔對照流程。等同於對這一份按了 /upload。
+function loadFromBatch(i){
+  const r = batchScan.results[i];
+  if (!r || !r.ok) return;
+  uploaded = {
+    filename: r.filename, visible_text: r.visible_text,
+    machine_text: r.machine_text, hidden: r.hidden, limitations: r.limitations,
+  };
+  $("input").value = r.machine_text;
+  showUpload(uploaded);
+  document.querySelectorAll(".samp").forEach(b => b.setAttribute("aria-pressed", "false"));
+  ["s-compare","s-verdict","s-views"].forEach(id => $(id).hidden = true);
+  $("run").scrollIntoView({behavior: "smooth", block: "center"});
+}
+
 async function handleFile(f){
   if (!f) return;
   $("err").hidden = true;
@@ -401,16 +516,17 @@ drop.addEventListener("click", () => $("file").click());
 drop.addEventListener("keydown", e => {
   if (e.key === "Enter" || e.key === " "){ e.preventDefault(); $("file").click(); }
 });
-$("file").addEventListener("change", e => handleFile(e.target.files[0]));
+$("file").addEventListener("change", e => handleFiles(e.target.files));
 ["dragenter","dragover"].forEach(ev =>
   drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave","drop"].forEach(ev =>
   drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
-drop.addEventListener("drop", e => handleFile(e.dataTransfer.files[0]));
+drop.addEventListener("drop", e => handleFiles(e.dataTransfer.files));
 
 // 手動改動內容後，先前的擷取結果就不再對應，必須丟棄
 $("input").addEventListener("input", () => {
   if (uploaded){ uploaded = null; $("upinfo").innerHTML = ""; }
+  // 批次表保留不動——它是清單，不是當前這份的擷取結果
 });
 
 $("run").addEventListener("click", run);
