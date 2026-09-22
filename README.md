@@ -66,10 +66,10 @@
 git clone https://github.com/<你的帳號>/white-on-white.git && cd white-on-white
 uv sync                      # 或 pip install -e ".[dev]"
 cp .env.example .env         # 填入 GEMINI_API_KEY
-uvicorn drill.api:app --reload
+uvicorn drill.api:app --reload --port 8765
 ```
 
-開 http://127.0.0.1:8000
+開 http://127.0.0.1:8765　（8000 常被其他服務佔用，這裡改用 8765）
 
 - `/` 互動示範：上傳或貼上一份履歷，看有無防護的判斷差異，以及注入藏在哪裡
 - `/report` 演練數據報告：六配置對照熱力圖、揭露率、風險對應
