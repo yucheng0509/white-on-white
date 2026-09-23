@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -312,6 +315,10 @@ class AnalyzeIn(BaseModel):
         default_factory=list,
         description="擷取階段已找到的隱藏內容（來自 /upload 的 hidden 欄位）",
     )
+    source_name: str | None = Field(
+        None, max_length=300,
+        description="檔名，用於稽核留痕。直接貼上的內容可不填。",
+    )
 
 
 @app.post("/analyze")
@@ -343,7 +350,10 @@ def analyze_material(payload: AnalyzeIn) -> dict:
             "raw_output": s.raw_output, "disclosed": s.disclosed,
         }
 
+    audit_id = _write_audit(payload, result)
+
     return {
+        "audit_id": audit_id,
         "verdict": result.verdict,
         "rankings_differ": result.rankings_differ,
         "followed_injection": result.followed_injection,
@@ -362,6 +372,72 @@ def analyze_material(payload: AnalyzeIn) -> dict:
         "stripped_count": len(result.hidden_spans),
         "usd": round(result.usd, 5),
     }
+
+
+def _write_audit(payload: AnalyzeIn, result: analyze_mod.AnalysisResult) -> int:
+    """留一筆可舉證的稽核紀錄。
+
+    只存 SHA-256 指紋不存全文：HR 被申訴或勞檢時，拿當初那份檔案重算
+    就能證明「這份當時被判定為 X」，而系統不因稽核需求囤積個資。
+    """
+    digest = hashlib.sha256(payload.content.encode("utf-8")).hexdigest()
+    with connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO audit_record
+               (source_name, content_sha256, content_chars, model, verdict,
+                hidden_count, hidden_kinds, finding_kinds,
+                ranking_bare, ranking_safe, rank_shifts, impact_line, usd)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                payload.source_name or "貼上的內容",
+                digest,
+                len(payload.content),
+                payload.model,
+                result.verdict,
+                len(result.hidden_spans),
+                json.dumps(sorted({h.kind for h in result.hidden_spans}), ensure_ascii=False),
+                json.dumps(sorted({f.kind for f in result.findings}), ensure_ascii=False),
+                json.dumps(result.unprotected.ranking, ensure_ascii=False),
+                json.dumps(result.protected.ranking, ensure_ascii=False),
+                json.dumps(result.rank_shifts, ensure_ascii=False),
+                result.impact_line,
+                round(result.usd, 5),
+            ),
+        )
+        return int(cur.lastrowid)
+
+
+def _audit_row(row) -> dict:
+    d = dict(row)
+    for key in ("hidden_kinds", "finding_kinds", "ranking_bare", "ranking_safe", "rank_shifts"):
+        try:
+            d[key] = json.loads(d[key]) if d[key] else []
+        except (TypeError, ValueError):
+            d[key] = []
+    return d
+
+
+@app.get("/audit")
+def list_audit(limit: int = 50) -> dict:
+    """稽核紀錄清單，最新的在前。"""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM audit_record ORDER BY id DESC LIMIT ?",
+            (max(1, min(limit, 500)),),
+        ).fetchall()
+    return {"count": len(rows), "records": [_audit_row(r) for r in rows]}
+
+
+@app.get("/audit/{record_id}")
+def get_audit(record_id: int) -> dict:
+    """單筆稽核紀錄。可直接存檔作為舉證附件。"""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM audit_record WHERE id=?", (record_id,)
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"稽核紀錄 {record_id} 不存在")
+    return _audit_row(row)
 
 
 @app.post("/upload")

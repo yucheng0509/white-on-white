@@ -97,3 +97,28 @@ CREATE TABLE IF NOT EXISTS drill_case (
 
 CREATE INDEX IF NOT EXISTS idx_case_run ON drill_case(run_id);
 CREATE INDEX IF NOT EXISTS idx_run_app ON drill_run(application_id);
+
+-- 稽核留痕：每一次分析留一筆可舉證的紀錄。
+--
+-- 刻意不存履歷全文，只存 SHA-256 指紋。HR 之後被申訴或勞檢時，
+-- 拿當初那份檔案重算 hash 就能證明「這份檔案當時被判定為 X」，
+-- 而系統不因為稽核需求額外囤積個資——這兩件事可以同時成立。
+CREATE TABLE IF NOT EXISTS audit_record (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    source_name    TEXT,             -- 檔名；直接貼上的內容記為「貼上的內容」
+    content_sha256 TEXT NOT NULL,    -- 內容指紋，可比對同一份，但無法還原內容
+    content_chars  INTEGER,
+    model          TEXT NOT NULL,    -- 組織實際使用的那個模型
+    verdict        TEXT NOT NULL,
+    hidden_count   INTEGER,
+    hidden_kinds   TEXT,             -- JSON 陣列：規則偵測到的隱藏通道類型
+    finding_kinds  TEXT,             -- JSON 陣列：語意偵測到的注入類型
+    ranking_bare   TEXT,             -- JSON：無防護那側的排序
+    ranking_safe   TEXT,             -- JSON：有防護那側的排序
+    rank_shifts    TEXT,             -- JSON：名次變化
+    impact_line    TEXT,
+    usd            REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_record(created_at);

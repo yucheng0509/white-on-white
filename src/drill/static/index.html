@@ -166,6 +166,20 @@ pre{margin:0;height:290px;overflow:auto;background:var(--ground);border:1px soli
   white-space:pre-wrap;word-break:break-all;color:var(--dim)}
 mark{background:rgba(229,72,77,.28);color:var(--fg);border-bottom:1.5px solid var(--crit);
   padding:1px 0;border-radius:2px}
+/* 規則偵測到的隱藏通道，與語意偵測分色：前者是「人看不到」的客觀事實，
+   後者是模型的判斷，證據強度不同，不該長得一樣 */
+mark.hid{background:rgba(229,72,77,.42);border-bottom:2px solid var(--crit)}
+mark.llm{background:rgba(245,165,36,.26);border-bottom:1.5px solid var(--warn)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--faint);margin-top:9px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;
+  vertical-align:-1px}
+.legend .h{background:rgba(229,72,77,.42);border:1px solid var(--crit)}
+.legend .l{background:rgba(245,165,36,.26);border:1px solid var(--warn)}
+/* 稽核留痕：HR 被申訴或勞檢時的舉證依據 */
+.audit{margin:0 0 14px;font-size:12px;color:var(--faint);
+  border-left:2px solid var(--line);padding-left:11px;line-height:1.7}
+.audit b{color:var(--dim);font-family:var(--mono)}
+.audit a{color:var(--accent)}
 .spin{display:inline-block;width:13px;height:13px;border:2px solid var(--line);
   border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -234,6 +248,7 @@ footer a{color:var(--accent)}
     <div class="stage-h"><span class="step">03</span><h2>發生了什麼事</h2></div>
     <div id="alert"></div>
     <div id="impact" hidden></div>
+    <p class="audit" id="audit" hidden></p>
     <div class="panel pad" id="findings"></div>
   </div>
 
@@ -242,12 +257,13 @@ footer a{color:var(--accent)}
     <p class="hint">同一份文件的兩種樣貌。紅色標記處，就是模型讀得到、而畫面上不一定看得到的內容。</p>
     <div class="views">
       <div>
-        <p class="view-h">人在畫面上看到的</p>
+        <p class="view-h" id="view-h-left">人在畫面上看到的</p>
         <iframe id="rendered" sandbox="" title="履歷的視覺呈現"></iframe>
       </div>
       <div>
         <p class="view-h">模型實際讀進去的</p>
         <pre id="source"></pre>
+        <div class="legend" id="legend"></div>
       </div>
     </div>
   </div>
@@ -291,14 +307,26 @@ function drawRank(el, ranking, flagLast){
   }).join("") || '<span class="why">模型未回傳可解析的排序</span>';
 }
 
-function highlight(content, findings){
-  const marks = findings.filter(f => f.offset >= 0).sort((a, b) => a.offset - b.offset);
+function highlight(content, findings, hiddenSpans){
+  // 兩種來源：規則偵測的隱藏通道（客觀事實，證據較強）與 LLM 的語意偵測。
+  // 同一個位置兩者都命中時，保留規則的那一個。
+  const marks = [];
+  (hiddenSpans || []).forEach(h => {
+    const at = content.indexOf(h.text);
+    if (at >= 0) marks.push({offset: at, len: h.text.length, cls: "hid"});
+  });
+  (findings || []).forEach(f => {
+    if (f.offset >= 0) marks.push({offset: f.offset, len: f.quote.length, cls: "llm"});
+  });
+  // 先照位置排，同位置讓規則優先（cls 為 hid 的排前面）
+  marks.sort((a, b) => a.offset - b.offset || (a.cls === "hid" ? -1 : 1));
+
   let out = "", pos = 0;
-  for (const f of marks){
-    if (f.offset < pos) continue;           // 與前一段重疊就跳過，避免標記錯位
-    out += esc(content.slice(pos, f.offset));
-    out += `<mark>${esc(content.substr(f.offset, f.quote.length))}</mark>`;
-    pos = f.offset + f.quote.length;
+  for (const m of marks){
+    if (m.offset < pos) continue;           // 與前一段重疊就跳過，避免標記錯位
+    out += esc(content.slice(pos, m.offset));
+    out += `<mark class="${m.cls}">${esc(content.substr(m.offset, m.len))}</mark>`;
+    pos = m.offset + m.len;
   }
   return out + esc(content.slice(pos));
 }
@@ -361,11 +389,25 @@ function render(data, content){
   }).join("") : '<p class="why">沒有偵測到試圖影響評分的內容。</p>';
   $("s-verdict").hidden = false;
 
-  $("rendered").srcdoc =
-    `<style>body{font:14px/1.7 "PingFang TC",system-ui;padding:14px;color:#111;background:#fff}
+  // 左側必須是「面試官真正會看到的東西」。上傳的檔案已在擷取階段分離出
+  // visible_text，用 content（＝machine_text）會把隱藏內容也畫出來，
+  // 那等於把整個對照的意義抵銷掉。
+  const spans = uploaded ? uploaded.hidden : [];
+  const css = `<style>body{font:14px/1.7 "PingFang TC",system-ui;padding:14px;color:#111;background:#fff}
      h2{font-size:15px;margin:0 0 4px}.resume{border-bottom:1px solid #e5e5e5;padding-bottom:10px;margin-bottom:12px}
-     p{margin:2px 0}</style>` + content;
-  $("source").innerHTML = highlight(content, data.findings);
+     p{margin:2px 0}pre{margin:0;font:inherit;white-space:pre-wrap;word-break:break-word}</style>`;
+  $("rendered").srcdoc = uploaded
+    ? css + `<pre>${esc(uploaded.visible_text)}</pre>`
+    : css + content;
+  $("view-h-left").textContent = uploaded
+    ? `面試官打開 ${uploaded.filename} 看到的` : "人在畫面上看到的";
+
+  $("source").innerHTML = highlight(content, data.findings, spans);
+  const nHid = spans.length, nLlm = data.findings.filter(f => f.offset >= 0).length;
+  $("legend").innerHTML =
+    (nHid ? `<span><i class="h"></i>規則偵測：人看不到的通道（${nHid} 處）</span>` : "") +
+    (nLlm ? `<span><i class="l"></i>語意偵測：試圖影響評分的內容（${nLlm} 處）</span>` : "") +
+    (nHid || nLlm ? "" : "<span>未標記到可定位的片段。</span>");
   $("s-views").hidden = false;
 }
 
@@ -384,12 +426,20 @@ async function run(){
         // 來自檔案的內容已分離好可見／隱藏，直接給後端，不要再跑 HTML 淨化器
         protected_content: uploaded ? uploaded.visible_text : null,
         hidden: uploaded ? uploaded.hidden : [],
+        source_name: uploaded ? uploaded.filename : null,
       }),
     });
     if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
     const data = await res.json();
     render(data, content);
     $("status").textContent = `本次花費 US$${data.usd}`;
+    if (data.audit_id){
+      $("audit").innerHTML =
+        `已留存稽核紀錄 <b>#${data.audit_id}</b>　·　
+         只記錄內容指紋（SHA-256）與判定結果，不保存履歷全文　·　
+         <a href="/audit/${data.audit_id}" target="_blank" rel="noopener">檢視／存檔</a>`;
+      $("audit").hidden = false;
+    }
   }catch(e){
     $("err").textContent = `分析失敗：${e.message}`;
     $("err").hidden = false;
