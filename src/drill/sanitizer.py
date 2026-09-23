@@ -22,6 +22,11 @@ _HIDDEN_STYLE_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("transparent", re.compile(r"opacity\s*:\s*0(?:\.0+)?\b", re.I)),
     ("white_text", re.compile(r"color\s*:\s*(?:#fff(?:fff)?\b|white\b|rgb\(\s*255\s*,\s*255\s*,\s*255\s*\))", re.I)),
     ("offscreen", re.compile(r"(?:left|top)\s*:\s*-\d{3,}(?:px|em)", re.I)),
+    # 高度壓成零再裁切。常與 aria-hidden 併用，視覺上完全不佔位。
+    # 單看 height:0 不算隱藏（可能只是還沒撐開），要搭配 overflow:hidden 才成立。
+    ("clipped", re.compile(
+        r"(?=[^\"']*height\s*:\s*0(?:px|pt|em|rem)?\b)"
+        r"(?=[^\"']*overflow\s*:\s*hidden)", re.I)),
 )
 
 _INVISIBLE_ATTRS = ("hidden",)
@@ -88,6 +93,14 @@ class _Extractor(HTMLParser):
             self.hidden.append(HiddenSpan(kind="alt", text=attr_map["alt"], context="img"))
             self.machine.append(attr_map["alt"])
             return
+
+        # title 提示文字：畫面上不出現，要滑鼠停留才顯示，但擷取工具照讀。
+        # 放在 return 之前，因為帶 title 的標籤本身可能還有正常的內文。
+        if attr_map.get("title"):
+            self.hidden.append(
+                HiddenSpan(kind="title_attr", text=attr_map["title"], context=tag)
+            )
+            self.machine.append(attr_map["title"])
 
         if self.mark_blocks and tag in _BLOCK_TAGS:
             label = next(

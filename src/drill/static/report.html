@@ -69,6 +69,16 @@
   </header>
 
   <section>
+    <h2>攻擊面盤點：文件裡有多少條「人看不到、機器讀得到」的通道</h2>
+    <p class="note">每一種通道各造一份只含它的探測檔，實測我們的擷取器抓不抓得到。
+      刻意不去爬真實平台——那只能回答「野外有多少」，回答不了「攻擊面有多大」。
+      <b style="color:var(--red)">盲點</b>指進得了模型、卻沒有被標記的通道，
+      是最危險的一類，已由回歸測試釘死為零。</p>
+    <div class="meta" id="surface-sum"></div>
+    <div class="card"><table id="surface"></table></div>
+  </section>
+
+  <section>
     <h2>防護措施有效性</h2>
     <p class="note">同一批注入樣本，只改變防護配置。這回答「我該做哪些措施、每項值多少」。</p>
     <div class="grid" id="configs"></div>
@@ -195,6 +205,35 @@ function renderDisclosure(report, labels){
   }
 }
 
+function renderSurface(d){
+  const esc = t => String(t).replace(/[&<>"]/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const STATUS = {
+    covered:      ["已覆蓋",  "var(--green)"],
+    blind_spot:   ["盲點",    "var(--red)"],
+    not_ingested: ["未讀取",  "var(--dim)"],
+    error:        ["探測失敗", "var(--amber)"],
+  };
+  document.getElementById("surface-sum").innerHTML = `
+    <span>已知通道　<b>${d.total}</b></span>
+    <span>已覆蓋　<b style="color:var(--green)">${d.covered}</b></span>
+    <span>盲點　<b style="color:${d.blind_spot ? "var(--red)" : "var(--green)"}">${d.blind_spot}</b></span>
+    <span>擷取器未讀取　<b>${d.not_ingested}</b></span>`;
+
+  const rows = d.channels.map(c => {
+    const [label, color] = STATUS[c.status] || ["—", "var(--dim)"];
+    return `<tr>
+      <td style="color:var(--dim);font-family:ui-monospace,monospace">${esc(c.format)}</td>
+      <td class="label">${esc(c.name)}</td>
+      <td class="label" style="color:var(--dim);white-space:normal">${esc(c.why_hidden)}</td>
+      <td style="color:${color};font-weight:600">${label}</td>
+    </tr>`;
+  }).join("");
+  document.getElementById("surface").innerHTML =
+    `<thead><tr><th>格式</th><th>通道</th><th>人為什麼看不到</th><th>狀態</th></tr></thead>
+     <tbody>${rows}</tbody>`;
+}
+
 function renderRisks(rr){
   const el = document.getElementById("risks");
   el.innerHTML = "";
@@ -242,9 +281,10 @@ async function main(){
     const appId = params.get("app") || "1";
     const reportId = runIds.split(",")[0];
 
-    const [cfg, report, matrix, rr] = await Promise.all([
+    const [cfg, report, matrix, rr, surf] = await Promise.all([
       get("/configs"), get(`/drills/${reportId}/report`),
       get("/matrix", {run_ids: runIds}), get(`/applications/${appId}/risk-report`),
+      get("/attack-surface"),
     ]);
     const labels = cfg.configs;
 
@@ -255,6 +295,7 @@ async function main(){
       <span>對照組排序正確　<b>${report.control.correct}/${report.control.n}</b></span>
       <span>演練批次　<b>#${runIds}</b></span>`;
 
+    renderSurface(surf);
     renderConfigs(report, labels);
     renderHeatmap(matrix);
     renderDisclosure(report, labels);

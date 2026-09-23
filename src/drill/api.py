@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from drill import analyze as analyze_mod
 from drill import extract as extract_mod
-from drill import mapping, redteam, report, runner
+from drill import mapping, redteam, report, runner, surface
 from drill.bootstrap import bootstrap
 from drill.config import AVAILABLE_TARGETS, CONFIG_LABELS, CostLimitExceeded, TARGET_MODELS
 from drill.db import connect, init_db
@@ -89,6 +89,20 @@ class RedTeamIn(BaseModel):
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/attack-surface")
+def attack_surface() -> dict:
+    """攻擊面盤點：每一種「人看不到、機器讀得到」的通道，我們抓不抓得到。
+
+    刻意不去爬真實平台——爬取有 ToS 與負載問題，也違反本專案
+    「絕不對真實服務進行測試」的守則，而且只能回答「野外有多少」，
+    回答不了「攻擊面有多大」。後者要靠把每種通道逐一造出來實測。
+
+    三態中 blind_spot（進得了模型卻沒被標記）是最危險的一類，
+    已由 tests/test_surface.py 釘死為零。
+    """
+    return surface.summary()
 
 
 @app.get("/configs")

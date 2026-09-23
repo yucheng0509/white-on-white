@@ -62,25 +62,55 @@ _LIGHT_COLORS = {"FFFFFF", "FEFEFE", "FDFDFD", "auto"}
 
 
 def _docx_runs(xml: bytes):
-    """逐個 w:r（文字 run）產出 (文字, 是否隱藏, 隱藏原因)。"""
+    """逐個 w:r（文字 run）產出 (文字, 是否隱藏, 隱藏原因)。
+
+    2026-09-23 攻擊面盤點後補上四種通道：文字色與網底同色、w:webHidden、
+    文字方塊內文字、以及修訂中已刪除的文字。前三種原本會進 machine_text
+    卻不被標記——模型讀得到而我們沒警告，是最危險的那一類漏洞。
+    """
     from xml.etree import ElementTree as ET
 
     root = ET.fromstring(xml)
+
+    # 文字方塊內的 run 需要靠祖先判定，而 ElementTree 沒有 parent 指標，
+    # 所以先掃一遍把它們的身分記下來。
+    boxed = {
+        id(r)
+        for box in root.iter(f"{_W}txbxContent")
+        for r in box.iter(f"{_W}r")
+    }
+
     for run in root.iter(f"{_W}r"):
-        text = "".join(t.text or "" for t in run.iter(f"{_W}t"))
+        # w:delText 是修訂模式下「已刪除」的文字：接受修訂後畫面上消失，
+        # 位元組卻留在檔案裡，而不少擷取工具照讀不誤。
+        plain = "".join(t.text or "" for t in run.iter(f"{_W}t"))
+        deleted = "".join(t.text or "" for t in run.iter(f"{_W}delText"))
+        text = plain or deleted
         if not text.strip():
             continue
 
         props = run.find(f"{_W}rPr")
         reason = ""
-        if props is not None:
+        if deleted and not plain:
+            reason = "del_revision"
+        elif id(run) in boxed:
+            reason = "textbox"
+        elif props is not None:
             if props.find(f"{_W}vanish") is not None:
                 reason = "vanish"                      # Word 的「隱藏文字」屬性
+            elif props.find(f"{_W}webHidden") is not None:
+                reason = "web_hidden"
             else:
                 color = props.find(f"{_W}color")
                 val = (color.get(f"{_W}val") if color is not None else "") or ""
+                shd = props.find(f"{_W}shd")
+                fill = (shd.get(f"{_W}fill") if shd is not None else "") or ""
                 if val.upper() in _LIGHT_COLORS and val != "auto":
                     reason = "white_text"
+                elif val and fill and val.upper() == fill.upper():
+                    # 文字色與網底色相同：看起來只是一塊色塊，字完全讀不出來。
+                    # 不限於白色，任何同色組合都成立。
+                    reason = "shading_match"
                 else:
                     size = props.find(f"{_W}sz")
                     half_pt = size.get(f"{_W}val") if size is not None else None
@@ -111,15 +141,27 @@ def extract_docx(data: bytes) -> ExtractedDoc:
 
         # 註解、頁首頁尾：模型讀得到，人多半不會特地去看
         for name in sorted(names):
-            if not re.fullmatch(r"word/(comments|header\d*|footer\d*)\.xml", name):
+            if not re.fullmatch(
+                r"word/(comments|header\d*|footer\d*|footnotes|endnotes)\.xml", name
+            ):
                 continue
-            label = {"c": "註解", "h": "頁首", "f": "頁尾"}[name.split("/")[1][0]]
+            stem = name.split("/")[1]
+            if stem.startswith("footnotes"):
+                label = "腳註"
+            elif stem.startswith("endnotes"):
+                label = "尾註"
+            elif stem.startswith("footer"):
+                label = "頁尾"
+            else:
+                label = {"c": "註解", "h": "頁首"}[stem[0]]
             for text, _is_hidden, _reason in _docx_runs(z.read(name)):
                 machine.append(text)
                 hidden.append(HiddenSpan(kind=f"docx_{label}", text=text, context=label))
 
         # 文件屬性：標題、主旨、關鍵字、備註都會被多數擷取工具讀進去
-        for name in ("docProps/core.xml", "docProps/app.xml"):
+        # custom.xml 是自訂文件屬性，藏在「進階內容資訊」裡，幾乎沒人會去看，
+        # 但多數擷取工具會連它一起讀出來。
+        for name in ("docProps/core.xml", "docProps/app.xml", "docProps/custom.xml"):
             if name not in names:
                 continue
             for match in re.finditer(rb">([^<>]{8,})<", z.read(name)):
@@ -241,6 +283,11 @@ _RPR_BY_CARRIER = {
     "vanish": "<w:rPr><w:vanish/></w:rPr>",
     "white_text": '<w:rPr><w:color w:val="FFFFFF"/></w:rPr>',
     "tiny_font": '<w:rPr><w:sz w:val="4"/></w:rPr>',
+    # 文字色與網底同色：畫面上只是一塊色塊。不限白色，任何同色組合都成立，
+    # 因此比白底白字更難用「是不是白的」這種規則擋掉。
+    "shading_match": '<w:rPr><w:color w:val="336699"/>'
+                     '<w:shd w:val="clear" w:fill="336699"/></w:rPr>',
+    "web_hidden": "<w:rPr><w:webHidden/></w:rPr>",
     "body": "",
 }
 
